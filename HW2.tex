@@ -114,7 +114,7 @@ specification of the mapping from names to descriptions is given at
 For this assignment you will write your own preprocessing code
 in \texttt{preprocessing.py}. This code should transform the
 data representations given above into a format for multi-class
-classification. In particular you will be responsible for,
+classification. In particular you will,
 
 \begin{itemize}
 \item Clean the input data following Section 3.4
@@ -141,9 +141,6 @@ preprocessing,
   replaced by a single special “RARE” word.
 \end{quote}
 
-
-We would recommend using \texttt{\#} instead \texttt{NUMBER} as that is more 
-common these days.  
 
 Also note the remark on border words, 
 
@@ -224,13 +221,14 @@ to debug.
 Note since the windowed setup has a fixed length, we can use a more appropriate 
 factorization than the last problem. Informally,
 
-\[ p(\boldx, \boldy=\delta(c)) = p(\boldy=\delta(c)) \prod_{i=-\lfloor{dwin/2}\rfloor}^{\lfloor{dwin/2}\rfloor}
+\[ p(\boldx, \boldy=\delta(c)) \approx p(\boldy=\delta(c)) \prod_{i=-\lfloor{dwin/2}\rfloor}^{\lfloor{dwin/2}\rfloor}
 p(\mathrm{word\ at\ i\ in\ }\boldx | \boldy =\delta(c))
 p(\mathrm{capitalization\ at\ i\ in\ }\boldx | \boldy =\delta(c)) \]
 
 That is we can treat each relative window position as a separate
-multinomial distribution over its feature instead of having a single
-multinomial over all features.
+multinomial distribution (assuming the word and its
+capitalization are independent), instead of having a single multinomial
+over all features.
 
 
 \subsection{Multiclass Logistic Regression}
@@ -311,9 +309,18 @@ to try many combinations of hyperparameters" (Although as we will see
 in the next assignment, that this training time has been brought down
 significantly.)
  
-Luckily, pre-trained word embeddings are now conveniently available on
-the internet. We will use the vectors provided in
-\texttt{data/word\_embeddings}. First, you should align the word
+Luckily, pre-trained word embeddings are now conveniently
+available. We will use the vectors learned in the work of
+\citet{DBLP:conf/emnlp/PenningtonSM14}. These are given in the 
+data directory as \texttt{data/glove.6B.50d.txt.gz}. The format 
+is one word per line with $d_{in}$ columns,   
+
+\begin{verbatim}
+zcat data/glove.6B.50d.txt.gz | head -n 1
+the 0.418 0.24968 -0.41242 0.1217 0.34527 ...
+\end{verbatim}
+
+First, you should align the word
 features with the vectors in this file in your preprocessing. 
 As part of preprocessing you should output a matrix of
 embeddings, where each row $i$ contains the embedding for 
