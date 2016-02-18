@@ -40,8 +40,6 @@ def get_tag_ids(tag_dict):
 
 def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_list, dataset):
     # Construct index/capital feature sets for each file
-    V = len(word_to_idx) + 1
-
     features = []
     cap_features = []
     lbl = []
@@ -67,14 +65,15 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
                 all_caps = int(word.isupper())
                 first_letter_cap = int(word[0].isupper())
                 has_one_cap = int(any(let.isupper() for let in word))
+                cap = 1
                 if lower_caps:
-                    cap = V+1
+                    cap = 2
                 elif all_caps:
-                    cap = V+2
+                    cap = 3
                 elif first_letter_cap:
-                    cap = V+3
+                    cap = 4
                 elif has_one_cap:
-                    cap = V+4
+                    cap = 5
                 word = clean_str(word, common_words_list)
 
                 features.append(word_to_idx[word])
@@ -178,12 +177,9 @@ def main(arguments):
         test_input, test_cap_input, _ = convert_data(test, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     # +4 for cap features
-    V = len(word_to_idx) + 1 + 4
+    # V = len(word_to_idx) + 1 + 4
+    V = len(word_to_idx) + 1
     print('Vocab size:', V)
-
-    train_input = np.hstack((train_input, train_cap_input))
-    valid_input = np.hstack((valid_input, valid_cap_input))
-    test_input = np.hstack((test_input, test_cap_input))
 
     C = len(tag_to_id)
 
@@ -196,20 +192,19 @@ def main(arguments):
     for word, vec in word_vecs.items():
         embed[word_to_idx[word] - 1] = vec
 
-    print train_input, train_input.shape
-    print V, C
-    print embed, embed.shape
-
     print 'Saving...'
     filename = args.dataset + '.hdf5'
     with h5py.File(filename, "w") as f:
         f['train_input'] = train_input
+        f['train_cap_input'] = train_cap_input
         f['train_output'] = train_output
         if valid:
             f['valid_input'] = valid_input
+            f['valid_cap_input'] = valid_cap_input
             f['valid_output'] = valid_output
         if test:
             f['test_input'] = test_input
+            f['test_cap_input'] = test_cap_input
         f['nfeatures'] = np.array([V], dtype=np.int32)
         f['nclasses'] = np.array([C], dtype=np.int32)
 
