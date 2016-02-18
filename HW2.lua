@@ -15,6 +15,7 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 cmd:option('-lambda', 1.0, 'regularization lambda for SGD')
+cmd:option('-hidden', 100, 'size of hidden layer for neural network')
 
 function train_nb(nclasses, nfeatures, X, Y, alpha)
   -- Trains naive Bayes model
@@ -41,16 +42,39 @@ function train_nb(nclasses, nfeatures, X, Y, alpha)
   return W, b
 end
 
-function train_logreg(X, Y, eta, batch_size, max_epochs, lambda, valid_X, valid_Y)
-  eta = eta or 0
-  batch_size = batch_size or 0
-  max_epochs = max_epochs or 0
-
-  -- build model
+function linear_model()
+  -- linear logistic model
   local model = nn.Sequential()
   model:add(nn.LookupTable(nfeatures, opt.vec_size))
   model:add(nn.Linear(opt.vec_size, nclasses))
   model:add(nn.LogSoftMax())
+
+  return model
+end
+
+function neural_model()
+  -- neural network from Collobert
+  local model = nn.Sequential()
+  model:add(nn.LookupTable(nfeatures, opt.vec_size))
+  model:add(nn.Linear(opt.vec_size, opt.hidden))
+  model:add(nn.HardTanh())
+  model:add(nn.Linear(opt.hidden, nclasses))
+  model:add(nn.LogSoftMax())
+
+  return model
+end
+
+function train_model(X, Y, eta, batch_size, max_epochs, lambda, valid_X, valid_Y, model_type)
+  eta = eta or 0
+  batch_size = batch_size or 0
+  max_epochs = max_epochs or 0
+
+  local model
+  if model_type == 'logreg' then
+    model = linear_model()
+  else
+    model = neural_model()
+  end
 
   local criterion = nn.ClassNLLCriterion()
 
@@ -66,7 +90,9 @@ function train_logreg(X, Y, eta, batch_size, max_epochs, lambda, valid_X, valid_
 
   local prev_loss = 1e10
   while epoch < max_epochs do
-    -- loop through each batch
+      local total_err = 0
+
+      -- loop through each batch
       for batch = 1, X:size(1), batch_size do
           if ((batch - 1) / batch_size) % 100 == 0 then
             print('Sample:', batch)
@@ -90,8 +116,7 @@ function train_logreg(X, Y, eta, batch_size, max_epochs, lambda, valid_X, valid_
             grads:zero()
 
             -- forward
-            local outputs = model:forward(X_batch)
-            local err = criterion:forward(outputs, Y_batch)
+            local err = criterion:forward(model:forward(X_batch), Y_batch)
 
             -- track errors
             total_err = total_err + err * batch_size
@@ -105,14 +130,31 @@ function train_logreg(X, Y, eta, batch_size, max_epochs, lambda, valid_X, valid_
 
           optim.sgd(func, params, state)
           -- padding to zero
-          model:get(1).weight[1]:zero()
+          --model:get(1).weight[1]:zero()
       end
 
       -- calculate loss
       model:evaluate()
 
-      local loss = criterion:forward(model:forward(inputs), targets)
-      print('Loss at epoch', epoch, ':', loss)
+      local loss = 0
+      for batch = 1, valid_X:size(1), batch_size do
+          if ((batch - 1) / batch_size) % 100 == 0 then
+            print('Sample:', batch)
+          end
+          local sz = batch_size
+          if batch + batch_size > N then
+            sz = N - batch + 1
+          end
+          local X_batch = valid_X:narrow(1, batch, sz)
+          local Y_batch = valid_Y:narrow(1, batch, sz)
+
+          local l = criterion:forward(model:forward(X_batch), Y_batch)
+          loss = loss + l * batch_size
+      end
+
+      print('Epoch:', epoch)
+      print('Train err:', err / X:size(1))
+      print('Valid err:', loss / valid_X:size(1))
 
       if torch.abs(prev_loss - loss) / prev_loss < 0.001 then
         prev_loss = loss
@@ -120,14 +162,10 @@ function train_logreg(X, Y, eta, batch_size, max_epochs, lambda, valid_X, valid_
       end
       prev_loss = loss
       epoch = epoch + 1
-      torch.save('train.t7', { W = W, b = b})
+      torch.save('train.t7', { model = model })
   end
   print('Trained', epoch, 'epochs')
-  return W, b, prev_loss
-end
-
-function train_neural(nclasses, nfeatures, X, Y, eta, batch_size, max_epochs, lambda, model, valid_X, valid_Y)
-
+  return model, prev_loss
 end
 
 function main() 
