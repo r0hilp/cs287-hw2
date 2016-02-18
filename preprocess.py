@@ -35,6 +35,7 @@ def get_tag_ids(tag_dict):
         for line in f:
             tag, id_num = tuple(line.split())
             tag_to_id[tag] = int(id_num)
+    # For test set, _ is an unknown tag
     tag_to_id['_'] = 0
     return tag_to_id
 
@@ -181,7 +182,8 @@ def main(arguments):
     V = len(word_to_idx) + 1
     print('Vocab size:', V)
 
-    C = len(tag_to_id)
+    # -1 for _ tag
+    C = len(tag_to_id) - 1
 
     # Get word vecs
     print 'Getting word vecs...'
@@ -206,6 +208,7 @@ def main(arguments):
             f['test_input'] = test_input
             f['test_cap_input'] = test_cap_input
         f['nfeatures'] = np.array([V], dtype=np.int32)
+        f['ncapfeatures'] = np.array([4], dtype=np.int32)
         f['nclasses'] = np.array([C], dtype=np.int32)
 
         f['word_vecs'] = embed
