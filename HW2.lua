@@ -18,12 +18,10 @@ cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 cmd:option('-lambda', 1.0, 'regularization lambda for SGD')
 cmd:option('-hidden', 100, 'size of hidden layer for neural network')
 
-function window_features(x, nfeat)
-  local ret = torch.LongTensor(x:size(1))
-  for i = 1, x:size(1) do
-    ret[i] = x[i] + (i-1)*nfeat
-  end
-  return ret
+function window_features(X, nfeat)
+  local range = torch.range(0, (window_size - 1)*nfeat, nfeat):long():view(1, window_size)
+  X:add(range:expand(X:size(1), X:size(2)))
+  return X
 end
 
 function train_nb(X, X_cap, Y, alpha)
@@ -37,27 +35,26 @@ function train_nb(X, X_cap, Y, alpha)
   b:log():csub(b_logsum)
 
   local W = torch.Tensor(nclasses, window_size * nfeatures):fill(alpha)
-  local W_cap = torch.Tensor(nclasses, window_size * ncapfeatures):fill(alpha)
   for i = 1, N do
-    local x = window_features(X[i], nfeatures)
-    local x_cap = window_features(X_cap[i], ncapfeatures)
-    W:select(1, Y[i]):indexAdd(1, x, torch.ones(x:size(1)))
-    W_cap:select(1, Y[i]):indexAdd(1, x_cap, torch.ones(x_cap:size(1)))
-    --for j = 1, window_size do
-      --W[Y[i]][j*nfeatures + X[i][j]] = W[Y[i]][j*nfeatures + X[i][j]] + 1
-      --W_cap[Y[i]][j*nfeatures + X_cap[i][j]] = W[Y[i]][j*nfeatures + X_cap[i][j]] + 1
-    --end
-    --W:select(1, Y[i]):indexAdd(1, X_all[i], torch.ones(k))
+    W:select(1, Y[i]):indexAdd(1, X[i], torch.ones(X[i]:size(1)))
   end
   -- zero out padding counts
   W:select(2, 1):zero()
-  W_cap:select(2, 1):zero()
   local W_logsum = torch.log(W:sum(2))
-  local W_cap_logsum = torch.log(W_cap:sum(2))
   W:log():csub(W_logsum:expand(W:size(1), W:size(2)))
-  W_cap:log():csub(W_cap_logsum:expand(W_cap:size(1), W_cap:size(2)))
   -- padding weight to zero
   W:select(2, 1):zero()
+
+  -- cap features
+  local W_cap = torch.Tensor(nclasses, window_size * ncapfeatures):fill(alpha)
+  for i = 1, N do
+    W_cap:select(1, Y[i]):indexAdd(1, X_cap[i], torch.ones(X_cap[i]:size(1)))
+  end
+  -- zero out padding counts
+  W_cap:select(2, 1):zero()
+  local W_cap_logsum = torch.log(W_cap:sum(2))
+  W_cap:log():csub(W_cap_logsum:expand(W_cap:size(1), W_cap:size(2)))
+  -- padding weight to zero
   W_cap:select(2, 1):zero()
 
   return W, W_cap, b
@@ -67,13 +64,9 @@ function linear(X, X_cap, W, W_cap, b)
   local N = X:size(1)
   local z = torch.zeros(N, nclasses)
   for i = 1, N do
-    local x = window_features(X[i], nfeatures)
-    local x_cap = window_features(X_cap[i], ncapfeatures)
     z[i]:add(b)
-    z[i]:add(W:index(2, x):sum(2))
-    z[i]:add(W_cap:index(2, x_cap):sum(2))
-      --z[i]:add(W:select(2, j):select(2, X[i][j]))
-      --z[i]:add(W:select(2, j):select(2, X[i][j + window_size]))
+    z[i]:add(W:index(2, X[i]):sum(2))
+    z[i]:add(W_cap:index(2, X_cap[i]):sum(2))
   end
 
   return z
@@ -233,22 +226,29 @@ function main()
    window_size = opt.window_size
 
    print('Loading data...')
-   local X = f:read('train_input'):all()
-   local X_cap = f:read('train_cap_input'):all()
+   local X = f:read('train_input'):all():long()
+   local X_cap = f:read('train_cap_input'):all():long()
    local Y = f:read('train_output'):all()
-   local valid_X = f:read('valid_input'):all()
-   local valid_X_cap = f:read('valid_cap_input'):all()
+   local valid_X = f:read('valid_input'):all():long()
+   local valid_X_cap = f:read('valid_cap_input'):all():long()
    local valid_Y = f:read('valid_output'):all()
-   local test_X = f:read('test_input'):all()
-   local test_X_cap = f:read('test_cap_input'):all()
+   local test_X = f:read('test_input'):all():long()
+   local test_X_cap = f:read('test_cap_input'):all():long()
    local word_vecs = f:read('word_vecs'):all()
+
+   local X_win = window_features(X, nfeatures)
+   local X_cap_win = window_features(X_cap, ncapfeatures)
+   local valid_X_win = window_features(valid_X, nfeatures)
+   local valid_X_cap_win = window_features(valid_X_cap, ncapfeatures)
+   local test_X_win = window_features(test_X, nfeatures)
+   local test_X_cap_win = window_features(test_X_cap, ncapfeatures)
 
    -- Train.
    print('Training...')
-   local W, W_cap, b = train_nb(X, X_cap, Y, opt.alpha)
+   local W, W_cap, b = train_nb(X_win, X_cap_win, Y, opt.alpha)
 
    -- Test.
-   local pred, err = eval(valid_X, valid_X_cap, valid_Y, W, W_cap, b)
+   local pred, err = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
    print('Percent correct:', err)
 end
 
