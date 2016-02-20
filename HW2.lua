@@ -282,7 +282,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
       end
       prev_loss = loss
       epoch = epoch + 1
-      torch.save('train.t7', { model = model })
+      torch.save('train_' .. opt.classifier .. '.t7', { model = model })
   end
   print('Trained', epoch, 'epochs')
   return model, prev_loss
@@ -337,6 +337,12 @@ function main()
      loss, err = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
    end
    print('Percent correct:', err)
+
+   local log_f = io.open(opt.classifier .. '.log', 'w')
+   log_f:write('Error ', err, '\n')
+   for k, v in pairs(opt) do
+     log_f:write(k, ' ', v, '\t')
+   end
 
    --local test_pred = eval(test_X_win, test_X_cap_win, valid_Y, W, W_cap, b)
    --f = io.open('PTB_pred.test', 'w')
