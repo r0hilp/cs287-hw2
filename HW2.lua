@@ -292,7 +292,7 @@ function main()
    -- Parse input params
    opt = cmd:parse(arg)
    local f = hdf5.open(opt.datafile, 'r')
-   nclasses = f:read('nclasses'):all():long()[1] - 1
+   nclasses = f:read('nclasses'):all():long()[1]
    nfeatures = f:read('nfeatures'):all():long()[1]
    --ncapfeatures = f:read('ncapfeatures'):all():long()[1]
    ncapfeatures = 5
