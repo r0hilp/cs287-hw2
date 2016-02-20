@@ -19,6 +19,7 @@ cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 cmd:option('-lambda', 1.0, 'regularization lambda for SGD')
 cmd:option('-hidden', 100, 'size of hidden layer for neural network')
 cmd:option('-cap_vec', 5, 'size of capitalization features vector embedding')
+cmd:option('-use_glove', 0, 'use word embeddings from Glove')
 
 function window_features(X, nfeat)
   local range = torch.range(0, (window_size - 1)*nfeat, nfeat):long():view(1, window_size)
@@ -26,10 +27,13 @@ function window_features(X, nfeat)
   return X
 end
 
-function train_nb(X, X_cap, Y, alpha)
+function train_nb(X, X_cap, Y)
   -- Trains naive Bayes model
-  alpha = alpha or 0
+  local alpha = opt.alpha
   local N = X:size(1)
+
+  local timer = torch.Timer()
+  local time = timer:time().real
 
   -- intercept
   local b = torch.histc(Y:double(), nclasses)
@@ -62,6 +66,7 @@ function train_nb(X, X_cap, Y, alpha)
     W_cap:select(2, 1):zero()
   end
 
+  print('Time for naive Bayes:', (timer:time().real - time) * 1000, 'ms')
   return W, W_cap, b
 end
 
@@ -110,11 +115,15 @@ function linear_model()
   return model
 end
 
-function neural_model()
+function neural_model(word_vecs)
   -- neural network from Collobert
   local model = nn.Sequential()
   local embeds = nn.ParallelTable()
-  embeds:add(nn.LookupTable(nfeatures * window_size, vec_size))
+  local word_embeds = nn.LookupTable(nfeatures * window_size, vec_size)
+  if opt.use_glove == 1 then
+    word_embeds.weight = word_vecs:repeatTensor(window_size, 1)
+  end
+  embeds:add(word_embeds)
   embeds:add(nn.LookupTable(ncapfeatures * window_size, opt.cap_vec))
   model:add(embeds)
   
@@ -132,16 +141,20 @@ function neural_model()
   return model
 end
 
-function model_eval(model, criterion, X, X_cap, Y, batch_size)
+function model_eval(model, criterion, X, X_cap, Y)
     -- batch eval
     model:evaluate()
+    local batch_size = opt.batch_size
     local N = X:size(1)
+    local classes = {}
+    for i = 1, nclasses do
+      table.insert(classes, i)
+    end
+    local confusion = optim.ConfusionMatrix(classes)
+    confusion:zero()
 
     local loss = 0
     for batch = 1, X:size(1), batch_size do
-        if ((batch - 1) / batch_size) % 100 == 0 then
-          print('Sample:', batch)
-        end
         local sz = batch_size
         if batch + batch_size > N then
           sz = N - batch + 1
@@ -150,25 +163,31 @@ function model_eval(model, criterion, X, X_cap, Y, batch_size)
         local X_cap_batch = X_cap:narrow(1, batch, sz)
         local Y_batch = Y:narrow(1, batch, sz)
 
-        local l = criterion:forward(model:forward{X_batch, X_cap_batch}, Y_batch)
+        local outputs = model:forward{X_batch, X_cap_batch}
+        local l = criterion:forward(outputs, Y_batch)
         loss = loss + l * batch_size
+
+        for j = 1, sz do
+          confusion:add(outputs[j], Y_batch[j])
+        end
     end
 
-    return loss
+    confusion:updateValids()
+    return loss / N, confusion.totalValid
 end
 
-function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, eta, batch_size, max_epochs, lambda, model_type)
-  eta = eta or 0
-  batch_size = batch_size or 0
-  max_epochs = max_epochs or 0
-  model_type = model_type or 'logreg'
+function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
+  local eta = opt.eta
+  local batch_size = opt.batch_size
+  local max_epochs = opt.max_epochs
+  local lambda = opt.lambda
   local N = X:size(1)
 
   local model
-  if model_type == 'logreg' then
+  if opt.classifier == 'logreg' then
     model = linear_model()
   else
-    model = neural_model()
+    model = neural_model(word_vecs)
   end
 
   local criterion = nn.ClassNLLCriterion()
@@ -183,15 +202,26 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, eta, batch_size
   local params, grads = model:getParameters()
   -- sgd state
   local state = { learningRate = eta, weightDecay = lambda }
+  -- confusion matrix
+  local classes = {}
+  for i = 1, nclasses do
+    table.insert(classes, i)
+  end
+  local confusion = optim.ConfusionMatrix(classes)
+  confusion:zero()
 
   local prev_loss = 1e10
   local epoch = 0
+  local timer = torch.Timer()
   while epoch < max_epochs do
+      print('Epoch:', epoch)
+      local epoch_time = timer:time().real
       local total_err = 0
+      confusion:zero()
 
       -- loop through each batch
       for batch = 1, X:size(1), batch_size do
-          if ((batch - 1) / batch_size) % 100 == 0 then
+          if ((batch - 1) / batch_size) % 1000 == 0 then
             print('Sample:', batch)
           end
           local sz = batch_size
@@ -219,6 +249,9 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, eta, batch_size
 
             -- track errors
             total_err = total_err + err * batch_size
+            for j = 1, sz do
+                confusion:add(outputs[j], Y_batch[j])
+            end
 
             -- compute gradients
             local df_do = criterion:backward(outputs, Y_batch)
@@ -233,12 +266,16 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, eta, batch_size
           model:get(1):get(2).weight[1]:zero()
       end
 
-      print('Epoch:', epoch)
-      print('Train err:', total_err / X:size(1))
+      print('Train loss:', total_err / X:size(1))
+      confusion:updateValids()
+      print('Train error:', confusion.totalValid)
 
-      local loss = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y, batch_size)
-      print('Valid err:', loss / valid_X:size(1))
+      local loss, valid_err = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y)
+      print('Valid loss:', loss)
+      print('Valid error:', valid_err)
 
+      print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
+      print('')
       if torch.abs(prev_loss - loss) / prev_loss < 0.001 then
         prev_loss = loss
         break
@@ -286,17 +323,18 @@ function main()
    local W, W_cap, b
    local model
    if opt.classifier == 'nb' then
-      W, W_cap, b = train_nb(X_win, X_cap_win, Y, opt.alpha)
+      W, W_cap, b = train_nb(X_win, X_cap_win, Y)
    else
-      model = train_model(X_win, X_cap_win, Y, valid_X_win, valid_X_cap_win, valid_Y, opt.eta, opt.batch_size, opt.max_epochs, opt.lambda, opt.classifier)
-    end
+      model = train_model(X_win, X_cap_win, Y, valid_X_win, valid_X_cap_win, valid_Y, word_vecs)
+   end
 
    -- Test.
    local pred, err
+   local loss
    if opt.classifier == 'nb' then
      pred, err = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
    else
-     err = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y, opt.batch_size)
+     loss, err = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
    end
    print('Percent correct:', err)
 
@@ -306,7 +344,6 @@ function main()
    --for i = 1, test_X:size(1) do
      --f:write(i, ",", pred[i][1],"\n")
    --end
-
 end
 
 main()
