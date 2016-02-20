@@ -14,24 +14,26 @@ import codecs
 def clean_str(string, common_words_list):
     # remove capitalization and replace numbers
     string = string.strip().lower()
-    while(any(let.isdigit() for let in string)):
-        string = re.sub(r"[0-9]+", "NUMBER", string)
+    # Sasha says don't replace numbers for Glove embeddings
+    # while(any(let.isdigit() for let in string)):
+        # string = re.sub(r"[0-9]+", "NUMBER", string)
     if string not in common_words_list:
         string = 'RARE'
     return string
 
 def get_common_words(file_name):
     # Get list of common words from glove file (change to trie if this is slow)
-    common_words_list = []
-    with codecs.open(file_name, "r", encoding="latin-1") as f:
+    common_words_list = set()
+    with open(file_name, "r") as f:
         for line in f:
-            common_words_list.append(line.split(' ')[0])
+            word = line.split(' ')[0]
+            common_words_list.add(word)
     return common_words_list
 
 def get_tag_ids(tag_dict):
     # Construct tag to id mapping
     tag_to_id = {}
-    with codecs.open(tag_dict, 'r', encoding="latin-1") as f:
+    with open(tag_dict, 'r') as f:
         for line in f:
             tag, id_num = tuple(line.split())
             tag_to_id[tag] = int(id_num)
@@ -121,7 +123,7 @@ def get_vocab(file_list, common_words_list, dataset=''):
 def load_word_vecs(file_name, vocab):
     # Get word vecs from glove
     word_vecs = {}
-    with codecs.open(file_name, "r", encoding="latin-1") as f:
+    with open(file_name, "r") as f:
         for line in f:
             vals = line.split()
             word = vals[0]
