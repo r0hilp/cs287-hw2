@@ -275,6 +275,8 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
             optim.sgd(func, params, state)
           elseif opt.optim_method == 'adadelta' then
             optim.adadelta(func, params, state)
+          elseif opt.optim_method == 'adagrad' then
+            optim.adagrad(func, params, state)
           end
           -- padding to zero
           model:get(1):get(1).weight[1]:zero()
