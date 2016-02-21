@@ -10,6 +10,7 @@ cmd:option('-datafile', 'PTB.hdf5', 'data file')
 cmd:option('-classifier', 'nb', 'classifier to use')
 cmd:option('-window_size', 5, 'window size')
 cmd:option('-warm_start', '', 'torch file with previous model')
+cmd:option('-model_out_name', 'train', 'output file name of model')
 
 -- Hyperparameters
 cmd:option('-use_cap', 1, 'use capitalization')
@@ -113,11 +114,15 @@ function linear_model()
   -- linear logistic model
   local model = nn.Sequential()
   local embeds = nn.ParallelTable()
-  embeds:add(nn.LookupTable(nfeatures * window_size, nclasses))
-  embeds:add(nn.LookupTable(ncapfeatures * window_size, nclasses))
+  local word_embed = nn.LookupTable(nfeatures * window_size, nclasses)
+  word_embed.weight[1]:zero()
+  local cap_embed = nn.LookupTable(ncapfeatures * window_size, nclasses)
+  cap_embed.weight[1]:zero()
+  embeds:add(word_embed)
+  embeds:add(cap_embed)
   model:add(embeds)
-  
   model:add(nn.JoinTable(2)) -- 2 for batch
+
   model:add(nn.Sum(2))
   model:add(nn.LogSoftMax())
 
@@ -132,12 +137,15 @@ function neural_model(word_vecs)
   -- neural network from Collobert
   local model = nn.Sequential()
   local embeds = nn.ParallelTable()
-  local word_embeds = nn.LookupTable(nfeatures * window_size, vec_size)
+  local word_embed = nn.LookupTable(nfeatures * window_size, vec_size)
+  word_embed.weight[1]:zero()
+  local cap_embed = nn.LookupTable(ncapfeatures * window_size, opt.cap_vec)
+  cap_embed.weight[1]:zero()
   if opt.use_glove == 1 then
-    word_embeds.weight = word_vecs:repeatTensor(window_size, 1)
+    word_embed.weight = word_vecs:repeatTensor(window_size, 1)
   end
-  embeds:add(word_embeds)
-  embeds:add(nn.LookupTable(ncapfeatures * window_size, opt.cap_vec))
+  embeds:add(word_embed)
+  embeds:add(cap_embed)
   model:add(embeds)
   
   local view = nn.ParallelTable()
@@ -158,9 +166,9 @@ function model_eval(model, criterion, X, X_cap, Y)
     -- batch eval
     model:evaluate()
     local N = X:size(1)
-    local batch_size = N --sopt.batch_size
+    local batch_size = opt.batch_size
 
-    local loss = 0
+    local total_loss = 0
     local total_correct = 0
     for batch = 1, X:size(1), batch_size do
         local sz = batch_size
@@ -172,12 +180,14 @@ function model_eval(model, criterion, X, X_cap, Y)
         local Y_batch = Y:narrow(1, batch, sz)
 
         local outputs = model:forward{X_batch, X_cap_batch}
+        local loss = criterion:forward(outputs, Y_batch)
 
         local _, correct = compute_err(Y_batch, outputs)
         total_correct = total_correct + correct
+        total_loss = total_loss + loss * batch_size
     end
 
-    return loss / N, total_correct / N
+    return total_loss / N, total_correct / N
 end
 
 function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
@@ -214,15 +224,15 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
       print('Epoch:', epoch)
       local epoch_time = timer:time().real
       local total_loss = 0
-      local total_correct = 0
 
       -- loop through each batch
+      model:training()
       for batch = 1, N, batch_size do
-          if ((batch - 1) / batch_size) % 1000 == 0 then
-            print('Sample:', batch)
-            print('Current train loss:', total_loss / batch)
-            print('Current time:', 1000 * (timer:time().real - epoch_time), 'ms')
-          end
+          --if ((batch - 1) / batch_size) % 1000 == 0 then
+            --print('Sample:', batch)
+            --print('Current train loss:', total_loss / batch)
+            --print('Current time:', 1000 * (timer:time().real - epoch_time), 'ms')
+          --end
           local sz = batch_size
           if batch + batch_size > N then
             sz = N - batch + 1
@@ -230,8 +240,6 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
           local X_batch = X:narrow(1, batch, sz)
           local X_cap_batch = X_cap:narrow(1, batch, sz)
           local Y_batch = Y:narrow(1, batch, sz)
-
-          model:training()
 
           -- closure to return err, df/dx
           local func = function(x)
@@ -243,17 +251,19 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
             grads:zero()
 
             -- forward
-            local outputs = model:forward{X_batch, X_cap_batch}
+            local outputs = model:forward{ X_batch, X_cap_batch }
             local loss = criterion:forward(outputs, Y_batch)
-            local _, correct = compute_err(Y_batch, outputs)
 
             -- track errors
             total_loss = total_loss + loss * batch_size
-            total_correct = total_correct + correct
+            --total_correct = total_correct + correct
 
             -- compute gradients
             local df_do = criterion:backward(outputs, Y_batch)
-            model:backward({X_batch, X_cap_batch}, df_do)
+            model:backward({ X_batch, X_cap_batch }, df_do)
+
+          --model:get(1):get(1).gradWeight[1]:zero()
+          --model:get(1):get(2).gradWeight[1]:zero()
 
             return loss, grads
           end
@@ -265,7 +275,6 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
       end
 
       print('Train loss:', total_loss / N)
-      print('Train percent:', total_correct / N)
 
       local loss, valid_percent = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y)
       print('Valid loss:', loss)
@@ -279,7 +288,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
       end
       prev_loss = loss
       epoch = epoch + 1
-      torch.save('train_' .. opt.classifier .. '.t7', { model = model })
+      torch.save(opt.model_out_name .. '_' .. opt.classifier .. '.t7', { model = model })
   end
   print('Trained', epoch, 'epochs')
   return model, prev_loss
