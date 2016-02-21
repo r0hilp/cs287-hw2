@@ -360,13 +360,15 @@ function main()
     local W, W_cap, b
     local model = torch.load(opt.test_model).model
     local outputs = model:forward{test_X_win, test_X_cap_win}
+    local _, pred = torch.max(outputs, 2)
     --local test_pred = eval(test_X_win, test_X_cap_win, valid_Y, W, W_cap, b)
     f = io.open('PTB_pred.test', 'w')
     f:write("ID,Category\n")
     for i = 1, test_X:size(1) do
-      f:write(test_ids[i], ",", outputs[i],"\n")
+      f:write(test_ids[i], ",", pred[i][1],"\n")
     end
    end
+end
 end
 
 main()
