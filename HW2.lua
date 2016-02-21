@@ -9,6 +9,7 @@ cmd = torch.CmdLine()
 cmd:option('-datafile', 'PTB.hdf5', 'data file')
 cmd:option('-classifier', 'nb', 'classifier to use')
 cmd:option('-window_size', 5, 'window size')
+cmd:option('-warm_start', '', 'torch file with previous model')
 
 -- Hyperparameters
 cmd:option('-use_cap', 1, 'use capitalization')
@@ -17,7 +18,7 @@ cmd:option('-eta', 0.01, 'learning rate for SGD')
 cmd:option('-batch_size', 32, 'batch size for SGD')
 cmd:option('-max_epochs', 20, 'max # of epochs for SGD')
 cmd:option('-lambda', 1.0, 'regularization lambda for SGD')
-cmd:option('-hidden', 100, 'size of hidden layer for neural network')
+cmd:option('-hidden', 300, 'size of hidden layer for neural network')
 cmd:option('-cap_vec', 5, 'size of capitalization features vector embedding')
 cmd:option('-use_glove', 0, 'use word embeddings from Glove')
 
@@ -84,23 +85,31 @@ function linear(X, X_cap, W, W_cap, b)
   return z
 end
 
-function eval(X, X_cap, Y, W, W_cap, b)
-  -- Returns error from Y
-  local pred = linear(X, X_cap, W, W_cap, b)
-  
+function compute_err(Y, pred)
   -- Compute error from Y
   local _, argmax = torch.max(pred, 2)
   argmax:squeeze()
 
-  local err
+  local correct
   if Y then
-    err = argmax:eq(Y:long()):sum()
-    err = err / Y:size(1)
+    correct = argmax:eq(Y:long()):sum()
   end
-  return argmax, err
+  return argmax, correct
+end
+
+function eval(X, X_cap, Y, W, W_cap, b)
+  -- Returns error from Y
+  local pred = linear(X, X_cap, W, W_cap, b)
+  
+  local argmax, correct = compute_err(Y, pred)
+  return argmax, correct
 end
 
 function linear_model()
+  if opt.warm_start ~= '' then
+    return torch.load(opt.warm_start).model
+  end
+
   -- linear logistic model
   local model = nn.Sequential()
   local embeds = nn.ParallelTable()
@@ -116,6 +125,10 @@ function linear_model()
 end
 
 function neural_model(word_vecs)
+  if opt.warm_start ~= '' then
+    return torch.load(opt.warm_start).model
+  end
+
   -- neural network from Collobert
   local model = nn.Sequential()
   local embeds = nn.ParallelTable()
@@ -144,16 +157,11 @@ end
 function model_eval(model, criterion, X, X_cap, Y)
     -- batch eval
     model:evaluate()
-    local batch_size = opt.batch_size
     local N = X:size(1)
-    local classes = {}
-    for i = 1, nclasses do
-      table.insert(classes, i)
-    end
-    local confusion = optim.ConfusionMatrix(classes)
-    confusion:zero()
+    local batch_size = N --sopt.batch_size
 
     local loss = 0
+    local total_correct = 0
     for batch = 1, X:size(1), batch_size do
         local sz = batch_size
         if batch + batch_size > N then
@@ -164,23 +172,19 @@ function model_eval(model, criterion, X, X_cap, Y)
         local Y_batch = Y:narrow(1, batch, sz)
 
         local outputs = model:forward{X_batch, X_cap_batch}
-        local l = criterion:forward(outputs, Y_batch)
-        loss = loss + l * batch_size
 
-        for j = 1, sz do
-          confusion:add(outputs[j], Y_batch[j])
-        end
+        local _, correct = compute_err(Y_batch, outputs)
+        total_correct = total_correct + correct
     end
 
-    confusion:updateValids()
-    return loss / N, confusion.totalValid
+    return loss / N, total_correct / N
 end
 
 function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
   local eta = opt.eta
   local batch_size = opt.batch_size
   local max_epochs = opt.max_epochs
-  local lambda = opt.lambda
+  --local lambda = opt.lambda
   local N = X:size(1)
 
   local model
@@ -201,28 +205,23 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
   -- only call this once
   local params, grads = model:getParameters()
   -- sgd state
-  local state = { learningRate = eta, weightDecay = lambda }
-  -- confusion matrix
-  local classes = {}
-  for i = 1, nclasses do
-    table.insert(classes, i)
-  end
-  local confusion = optim.ConfusionMatrix(classes)
-  confusion:zero()
+  local state = { learningRate = eta } -- weightDecay = lambda
 
   local prev_loss = 1e10
-  local epoch = 0
+  local epoch = 1
   local timer = torch.Timer()
-  while epoch < max_epochs do
+  while epoch <= max_epochs do
       print('Epoch:', epoch)
       local epoch_time = timer:time().real
-      local total_err = 0
-      confusion:zero()
+      local total_loss = 0
+      local total_correct = 0
 
       -- loop through each batch
-      for batch = 1, X:size(1), batch_size do
+      for batch = 1, N, batch_size do
           if ((batch - 1) / batch_size) % 1000 == 0 then
             print('Sample:', batch)
+            print('Current train loss:', total_loss / batch)
+            print('Current time:', 1000 * (timer:time().real - epoch_time), 'ms')
           end
           local sz = batch_size
           if batch + batch_size > N then
@@ -245,19 +244,18 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
 
             -- forward
             local outputs = model:forward{X_batch, X_cap_batch}
-            local err = criterion:forward(outputs, Y_batch)
+            local loss = criterion:forward(outputs, Y_batch)
+            local _, correct = compute_err(Y_batch, outputs)
 
             -- track errors
-            total_err = total_err + err * batch_size
-            for j = 1, sz do
-                confusion:add(outputs[j], Y_batch[j])
-            end
+            total_loss = total_loss + loss * batch_size
+            total_correct = total_correct + correct
 
             -- compute gradients
             local df_do = criterion:backward(outputs, Y_batch)
             model:backward({X_batch, X_cap_batch}, df_do)
 
-            return err, grads
+            return loss, grads
           end
 
           optim.sgd(func, params, state)
@@ -266,17 +264,16 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
           model:get(1):get(2).weight[1]:zero()
       end
 
-      print('Train loss:', total_err / X:size(1))
-      confusion:updateValids()
-      print('Train error:', confusion.totalValid)
+      print('Train loss:', total_loss / N)
+      print('Train percent:', total_correct / N)
 
-      local loss, valid_err = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y)
+      local loss, valid_percent = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y)
       print('Valid loss:', loss)
-      print('Valid error:', valid_err)
+      print('Valid percent:', valid_percent)
 
       print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
       print('')
-      if torch.abs(prev_loss - loss) / prev_loss < 0.001 then
+      if torch.abs(prev_loss - loss) / prev_loss < 0.001 and epoch > 10 then
         prev_loss = loss
         break
       end
@@ -329,17 +326,17 @@ function main()
    end
 
    -- Test.
-   local pred, err
+   local pred, percent
    local loss
    if opt.classifier == 'nb' then
-     pred, err = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
+     pred, percent = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
    else
-     loss, err = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
+     loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
    end
-   print('Percent correct:', err)
+   print('Percent correct:', percent)
 
    local log_f = io.open(opt.classifier .. '.log', 'w')
-   log_f:write('Error ', err, '\n')
+   log_f:write('Error ', percent, '\n')
    for k, v in pairs(opt) do
      log_f:write(k, ' ', v, '\t')
    end
