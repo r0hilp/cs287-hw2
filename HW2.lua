@@ -291,7 +291,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
 
       print('time for one epoch: ', (timer:time().real - epoch_time) * 1000, 'ms')
       print('')
-      if torch.abs(prev_loss - loss) / prev_loss < 0.001 and epoch > 10 then
+      if loss > prev_loss then
         prev_loss = loss
         break
       end
