@@ -7,9 +7,11 @@ cmd = torch.CmdLine()
 
 -- Cmd Args
 cmd:option('-datafile', 'PTB.hdf5', 'data file')
+cmd:option('-action', 'train', 'train or test')
 cmd:option('-classifier', 'nb', 'classifier to use')
 cmd:option('-window_size', 5, 'window size')
 cmd:option('-warm_start', '', 'torch file with previous model')
+cmd:option('-test_model', '', 'model to test on')
 cmd:option('-model_out_name', 'train', 'output file name of model')
 
 -- Hyperparameters
@@ -313,6 +315,7 @@ function main()
    local valid_Y = f:read('valid_output'):all()
    local test_X = f:read('test_input'):all():long()
    local test_X_cap = f:read('test_cap_input'):all():long()
+   local test_ids = f:read('test_ids'):all():long()
    -- Word embeddings from glove
    local word_vecs = f:read('word_vecs'):all()
    vec_size = word_vecs:size(2)
@@ -325,37 +328,45 @@ function main()
    local test_X_cap_win = window_features(test_X_cap, ncapfeatures)
 
    -- Train.
-   print('Training...')
-   local W, W_cap, b
-   local model
-   if opt.classifier == 'nb' then
-      W, W_cap, b = train_nb(X_win, X_cap_win, Y)
-   else
-      model = train_model(X_win, X_cap_win, Y, valid_X_win, valid_X_cap_win, valid_Y, word_vecs)
-   end
+   if opt.action == 'train' then
+    print('Training...')
+    local W, W_cap, b
+    local model
+    if opt.classifier == 'nb' then
+        W, W_cap, b = train_nb(X_win, X_cap_win, Y)
+    else
+        model = train_model(X_win, X_cap_win, Y, valid_X_win, valid_X_cap_win, valid_Y, word_vecs)
+    end
+
+    -- Validate.
+    local pred, percent
+    local loss
+    if opt.classifier == 'nb' then
+      pred, percent = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
+    else
+      loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
+    end
+    print('Percent correct:', percent)
+
+    local log_f = io.open(opt.classifier .. '.log', 'w')
+    log_f:write('Error ', percent, '\n')
+    for k, v in pairs(opt) do
+      log_f:write(k, ' ', v, '\t')
+    end
 
    -- Test.
-   local pred, percent
-   local loss
-   if opt.classifier == 'nb' then
-     pred, percent = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
-   else
-     loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
+   else if opt.action == 'test' then
+    print('Testing...')
+    local W, W_cap, b
+    local model = torch.load(opt.test_model).model
+    local outputs = model:forward{test_X_win, test_X_cap_win}
+    --local test_pred = eval(test_X_win, test_X_cap_win, valid_Y, W, W_cap, b)
+    f = io.open('PTB_pred.test', 'w')
+    f:write("ID,Category\n")
+    for i = 1, test_X:size(1) do
+      f:write(test_ids[i], ",", outputs[i],"\n")
+    end
    end
-   print('Percent correct:', percent)
-
-   local log_f = io.open(opt.classifier .. '.log', 'w')
-   log_f:write('Error ', percent, '\n')
-   for k, v in pairs(opt) do
-     log_f:write(k, ' ', v, '\t')
-   end
-
-   --local test_pred = eval(test_X_win, test_X_cap_win, valid_Y, W, W_cap, b)
-   --f = io.open('PTB_pred.test', 'w')
-   --f:write("ID,Category\n")
-   --for i = 1, test_X:size(1) do
-     --f:write(i, ",", pred[i][1],"\n")
-   --end
 end
 
 main()

@@ -46,15 +46,18 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
     features = []
     cap_features = []
     lbl = []
+    ids = []
     window_features = []
     window_cap_features = []
     window_lbl = []
+    window_ids = []
     with codecs.open(data_name, "r", encoding="latin-1") as f:
         # initial padding
         features.extend([1] * (window_size/2))
         cap_features.extend([1] * (window_size/2))
         lbl.extend([0] * (window_size/2))
-        
+        ids.extend([0] * (window_size/2))
+
         for line in f:
             line = line.rstrip()
             if len(line) == 0:
@@ -62,8 +65,9 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
                 features.extend([1] * (window_size/2))
                 cap_features.extend([1] * (window_size/2))
                 lbl.extend([0] * (window_size/2))
+                ids.extend([0] * (window_size/2))
             else:
-                _, _, word, tag = tuple(line.split('\t'))
+                global_id, _, word, tag = tuple(line.split('\t'))
                 lower_caps = int(word.islower())
                 all_caps = int(word.isupper())
                 first_letter_cap = int(word[0].isupper())
@@ -82,10 +86,12 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
                 features.append(word_to_idx[word])
                 cap_features.append(cap)
                 lbl.append(tag_to_id[tag])
+                ids.append(global_id)
         # end padding
         features.extend([1] * (window_size/2))
         cap_features.extend([1] * (window_size/2))
         lbl.extend([0] * (window_size/2))
+        ids.extend([0] * (window_size/2))
 
     # Convert to windowed features
     for i in range(len(features)):
@@ -99,7 +105,8 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
             window_features.append(features[i_low:i_high])
             window_cap_features.append(cap_features[i_low:i_high])
             window_lbl.append(lbl[i])
-    return np.array(window_features, dtype=np.int32), np.array(window_cap_features, dtype=np.int32), np.array(window_lbl, dtype=np.int32)
+            window_ids.append(ids[i])
+    return np.array(window_features, dtype=np.int32), np.array(window_cap_features, dtype=np.int32), np.array(window_lbl, dtype=np.int32), np.array(window_ids, dtype=np.int32)
 
 def get_vocab(file_list, common_words_list, dataset=''):
     # Construct index feature dictionary.
@@ -171,13 +178,13 @@ def main(arguments):
 
     # Convert data
     print 'Processing data...'
-    train_input, train_cap_input, train_output = convert_data(train, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
+    train_input, train_cap_input, train_output, _ = convert_data(train, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     if valid:
-        valid_input, valid_cap_input, valid_output = convert_data(valid, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
+        valid_input, valid_cap_input, valid_output, _ = convert_data(valid, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     if test:
-        test_input, test_cap_input, _ = convert_data(test, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
+        test_input, test_cap_input, _, test_ids = convert_data(test, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     # +4 for cap features
     # V = len(word_to_idx) + 1 + 4
@@ -209,6 +216,7 @@ def main(arguments):
         if test:
             f['test_input'] = test_input
             f['test_cap_input'] = test_cap_input
+            f['test_ids'] = test_ids
         f['nfeatures'] = np.array([V], dtype=np.int32)
         f['ncapfeatures'] = np.array([4], dtype=np.int32)
         f['nclasses'] = np.array([C], dtype=np.int32)
