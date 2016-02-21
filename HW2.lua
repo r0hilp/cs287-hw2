@@ -13,6 +13,7 @@ cmd:option('-window_size', 5, 'window size')
 cmd:option('-warm_start', '', 'torch file with previous model')
 cmd:option('-test_model', '', 'model to test on')
 cmd:option('-model_out_name', 'train', 'output file name of model')
+cmd:option('-optim_method', 'sgd', 'loss function optimization method')
 
 -- Hyperparameters
 cmd:option('-use_cap', 1, 'use capitalization')
@@ -270,7 +271,11 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
             return loss, grads
           end
 
-          optim.sgd(func, params, state)
+          if opt.optim_method == 'sgd' then
+            optim.sgd(func, params, state)
+          elseif opt.optim_method == 'adadelta' then
+            optim.adadelta(func, params, state)
+          end
           -- padding to zero
           model:get(1):get(1).weight[1]:zero()
           model:get(1):get(2).weight[1]:zero()
@@ -355,7 +360,7 @@ function main()
     end
 
    -- Test.
-   else if opt.action == 'test' then
+   elseif opt.action == 'test' then
     print('Testing...')
     local W, W_cap, b
     local model = torch.load(opt.test_model).model
@@ -368,7 +373,6 @@ function main()
       f:write(test_ids[i], ",", pred[i][1],"\n")
     end
    end
-end
 end
 
 main()
