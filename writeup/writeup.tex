@@ -9,46 +9,27 @@
 \maketitle{}
 \section{Introduction}
 
-This note lays out our expectation for a homework submission in
-\textit{CS287: Statistical Natural Language Processing}. While you do
-not have to follow this template to the letter, we do expect that
-write-ups have a very clear structure and cover all the elements
-described in this note. With this in mind, the burden is on the
-presenter to demonstrate why deviations from the standard are
-necessary.
+In this assignment, we tackle the problem of part-of-speech tagging. 
 
-All write-ups should include a short introduction. In this section you
-should summarize the underlying problem in high-level language and
-describe the extensions that you have decided to propose in your
-implementation. When you describe these extensions you should
-carefully cite the papers of interest. For instance, it will often be
-useful to cite the work seen in class
-\citep{murphy2012machine}. Alternatively, you can also cite papers
-inline, for instance the work of \citet{berger1996maximum}.
+The problem can be outlined as follows. Given a set of tokenized text with each token given a tag corresponding to the part of speech that it functions as, can we train a model that can read in other sets of tokenized text and accurately determine the part of speech for every word? 
 
+We will train our models on a tagged excerpt from the Wall Street Journal and test them on another. We examine three different models for this purpose. These three models are multinomial naive Bayes, logistic regression, and the neural network from [Collobert et al]. 
+
+In Section $2$, we introduce our notation and give a description of our problem in formal language. In Section $3$, we describe our three models. In Section $4$, we present our experimental results for model performance and hyperparamater tuning. In Section $5$, we conclude with a discussion of our results. 
 
 \section{Problem Description}
 
-In general, homeworks will be specified using informal
-language. As part of the assignment, we expect you to write-out a
-definition of the problem and your model in formal language. For this
-class, we will use the following notation:
+Our raw data consists of pairs $(w_i, t_i)$, where $w_i$ is a word and $t_i$ is its corresponding part of speech tag. The $t_i$ are elements of a finite set of classes $\mcT$. 
 
-\begin{itemize}
-\item $\boldb, \boldm$;  bold letters for vectors.
-\item $\boldB, \boldM$;  bold capital letters for matrices.
-\item $\mcB, \mcM$;  script-case for sets.
-\item $b_i, x_i$; lower case for scalars or indexing into vectors.
-\end{itemize}
+We construct a feature representation $\phi(w_i)$ of each word as follows. 
 
+First, construct the vocabulary $\mcV$ of the training and testing sets. To keep this from growing too large, we only use lower-case words. Furthermore, we map any uncommon words to a special ``RARE'' word, where we use the words in the publicly available data from [Glove paper] as our ``common words'' dictionary. Then, we can associate a sparse one-hot feature vector $j_i \in \{0,1\}^{|\mcV|}$ to $w_i$ that represents the index $j$ that $w_i$ maps to in $\mcV$. 
 
-For instance in natural language processing, it is common to use
-discrete sets like $\mcV$ for the vocabulary of the language, or $\mcT$ for a
-tag set of the language.  We might also want one-hot vectors
-representing words. These will be of the type
-$\boldv \in \{0,1\}^{|\mcV|}$. In a note, it is crucial to define the
-types of all variables that are introduced. The problem description is the
-right place to do this.
+Second, we can also construct a sparse one-hot feature vector $c_i \in \{0,1\}^c$ that keeps track of the capitalization information in $w_i$ that we lost above. This tracks whether $w_i$ is all uppercase, all lowercase, starts with an uppercase letter, contains an uppercase letter, or satisfies none of these conditions. 
+
+Finally, we add context by not only adding in the features of $w_i$ to $\phi(w_i)$, but also adding in the features of the words in a \emph{window} around $w_i$. In our case, we use a window of size $5$, so $\phi(w_i)$ consists of vectors $\boldx_{word} = \{j_{i-2}, j_{i-1},j_i, j_{i+1}, j_{i+2}\}$ and $\boldx_{cap} = \{c_{i-2}, c_{i-1}, c_i, c_{i+1}, c_{i+2}\}$ of vocabulary and capitalization features corresponding to the surrounding word window, which we will denote by $\boldw_i$ or $\boldw$ for short. 
+
+Our goal is to learn a function $f: (\{0,1\}^{|\mcV|} \times \{0,1\}^c) \to [0,1]^\mcT$ that takes in a window of words $\boldw$ and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the probability $p(k|w_3)$ of the middle word $w_3 \in \boldw$ having tag $k$. 
 
 % NLP is also
 % full of sequences. For instance sentences, $w_1, \ldots, w_N$, where
@@ -63,19 +44,54 @@ right place to do this.
 
 \section{Model and Algorithms}
 
-Here you specify the model itself. This section should formally
-describe the model used to solve the task proposed in the previous
-section. This section should try to avoid introducing new vocabulary
-or notation, when possible use the notation from the previous section.
-Feel free to use the notation from class, but try to make the note
-understandable as a standalone piece of text.
+We use three models:
+\begin{itemize}
+  \item multinomial naive Bayes (MNB)
+  \item logistic regression
+  \item neural network from [Collobert]
+\end{itemize}
 
-This section is also a great place to include other material that
-describes the underlying structure and choices of your model, for
-instance here are some example tables and algorithms from full
-research papers:
+Below we describe the setup of each.
 
+\subsection{Multinomial Naive Bayes}
 
+In MNB, we assume that the features of a word window $\boldw$ are independent of each other. 
+
+We can apply Bayes' law to calculate the probability $p(t| \boldw)$ of class $t$ given $\boldw$. 
+$$p(t| \boldw) = \frac{p(t)p(\boldw |t)}{p(\boldw)}$$
+
+Our prediction $\hat{y}$ for $\boldw$ is given by the maximum-probability tag
+$$\hat{y} = \argmax_{t} p(t | x)$$
+
+Note that $\boldw$ is a window of words. Assuming that the middle word is equal to $w_i$, we can apply our independence assumption to get 
+
+$$p(t | \boldw) = \frac{p(t)\prod_{d=-2}^{d=2} p(w_{i+d} | t)}{\prod_{d=-2}^{d=2} p(w_{i+d})}$$
+
+The $p(w_{i+d})$ are constant functions of the output $t$, so we can focus on calculating the terms in the numerator. 
+
+Recall that every word $w$ can be represented as a two sets of binary values $e_1, \dots, e_{|\mcV|}$ and $e^{cap}_1, \dots, e^{cap}_{|c|}$. By our independence assumption, we have 
+$$p(w | t) = p(e_1, \dots, e_{|\mcV|}, e^{cap}_1, \dots, e^{cap}_{|c|} | t) = \prod_{m=1}^{|\mcV|} p(e_m | t) \prod_{n=1}^{|c|} p(e^{cap}_n | t)$$
+
+Therefore, it suffices to maximize the $p(e_m | t)$ and $p(e^{cap}_n | t)$. Under negative log-likelihood loss, these are maximized over the entire training set by counting the number of samples with tag $t$ that have word feature $e_m$ and capitalization feature $e^{cap}_n$ respectively and then dividing by the total number of samples with tag $t$. 
+
+The maximum likelihood estimate for $p(t)$ is the proportion of samples with tag $t$. 
+
+Overall, our prediction becomes
+$$\hat{y} = \argmax_t \sum_d (\sum_m \log p(e_m | t) + \sum_n \log p(e^{cap}_n | t)) + \log p(t)$$
+where the sum is taken over all words in the window $\boldw$. 
+
+\subsection{Logistic Regression}
+
+We assume a linear model $z = \boldx_{word} \boldW + \boldx_{cap} \boldW_{cap} + \boldb$, where $\boldx_{word}$ and $\boldx_{cap}$ are the word and capitalization features of an input word window $\boldw$. 
+
+We then apply the softmax function to get an output $\hat{\boldy}$, where $\hat{y}_t$ is the predicted probability for a tag $t$ given the window $\boldw$. 
+
+This is implemented using the following neural network architecture:
+(Picture)
+
+where the gradients are optimized via stochastic gradient descent like in our last assignment. 
+
+\subsection{Neural Network}
 
 \begin{itemize}
 \item diagrams of your model,
