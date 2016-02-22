@@ -41,20 +41,23 @@ def get_tag_ids(tag_dict):
     tag_to_id['_'] = 0
     return tag_to_id
 
-def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_list, dataset):
+def convert_data(data_name, word_to_idx, suffix_to_idx, tag_to_id, window_size, common_words_list, dataset):
     # Construct index/capital feature sets for each file
     features = []
     cap_features = []
+    suffix_features = [] # extension
     lbl = []
     ids = []
     window_features = []
     window_cap_features = []
+    window_suffix_features = []
     window_lbl = []
     window_ids = []
     with codecs.open(data_name, "r", encoding="latin-1") as f:
         # initial padding
         features.extend([1] * (window_size/2))
         cap_features.extend([1] * (window_size/2))
+        suffix_features.extend([1] * (window_size/2))
         lbl.extend([0] * (window_size/2))
         ids.extend([0] * (window_size/2))
 
@@ -64,6 +67,7 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
                 # add padding word
                 features.extend([1] * (window_size/2))
                 cap_features.extend([1] * (window_size/2))
+                suffix_features.extend([1] * (window_size/2))
                 lbl.extend([0] * (window_size/2))
                 ids.extend([0] * (window_size/2))
             else:
@@ -82,14 +86,17 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
                 elif has_one_cap:
                     cap = 5
                 word = clean_str(word, common_words_list)
+                suffix = word[-2:]
 
                 features.append(word_to_idx[word])
                 cap_features.append(cap)
+                suffix_features.append(suffix_to_idx[suffix])
                 lbl.append(tag_to_id[tag])
                 ids.append(global_id)
         # end padding
         features.extend([1] * (window_size/2))
         cap_features.extend([1] * (window_size/2))
+        suffix_features.extend([1] * (window_size/2))
         lbl.extend([0] * (window_size/2))
         ids.extend([0] * (window_size/2))
 
@@ -104,15 +111,18 @@ def convert_data(data_name, word_to_idx, tag_to_id, window_size, common_words_li
             i_high = i + window_size/2 + 1
             window_features.append(features[i_low:i_high])
             window_cap_features.append(cap_features[i_low:i_high])
+            window_suffix_features.append(suffix_features[i_low:i_high])
             window_lbl.append(lbl[i])
             window_ids.append(ids[i])
-    return np.array(window_features, dtype=np.int32), np.array(window_cap_features, dtype=np.int32), np.array(window_lbl, dtype=np.int32), np.array(window_ids, dtype=np.int32)
+    return np.array(window_features, dtype=np.int32), np.array(window_cap_features, dtype=np.int32), np.array(window_lbl, dtype=np.int32), np.array(window_ids, dtype=np.int32), np.array(window_suffix_features, dtype=np.int32)
 
 def get_vocab(file_list, common_words_list, dataset=''):
     # Construct index feature dictionary.
     word_to_idx = {}
+    suffix_to_idx = {}
     # Start at 2 (1 is padding)
     idx = 2
+    suffix_idx = 2
     for filename in file_list:
         if filename:
             with codecs.open(filename, "r", encoding="latin-1") as f:
@@ -125,7 +135,11 @@ def get_vocab(file_list, common_words_list, dataset=''):
                     if word not in word_to_idx:
                         word_to_idx[word] = idx
                         idx += 1
-    return word_to_idx
+                    suffix = word[-2:]
+                    if suffix not in suffix_to_idx:
+                        suffix_to_idx[suffix] = suffix_idx
+                        suffix_idx += 1
+    return word_to_idx, suffix_to_idx
 
 def load_word_vecs(file_name, vocab):
     # Get word vecs from glove
@@ -174,17 +188,17 @@ def main(arguments):
 
     # Get index features
     print 'Getting vocab...'
-    word_to_idx = get_vocab([train, valid, test], common_words_list, dataset)
+    word_to_idx, suffix_to_idx = get_vocab([train, valid, test], common_words_list, dataset)
 
     # Convert data
     print 'Processing data...'
-    train_input, train_cap_input, train_output, _ = convert_data(train, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
+    train_input, train_cap_input, train_output, _, train_suffix_input = convert_data(train, word_to_idx, suffix_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     if valid:
-        valid_input, valid_cap_input, valid_output, _ = convert_data(valid, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
+        valid_input, valid_cap_input, valid_output, _, valid_suffix_input = convert_data(valid, word_to_idx, suffix_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     if test:
-        test_input, test_cap_input, _, test_ids = convert_data(test, word_to_idx, tag_to_id, window_size, common_words_list, dataset)
+        test_input, test_cap_input, _, test_ids, test_suffix_input  = convert_data(test, word_to_idx, suffix_to_idx, tag_to_id, window_size, common_words_list, dataset)
 
     # +4 for cap features
     # V = len(word_to_idx) + 1 + 4
@@ -208,17 +222,21 @@ def main(arguments):
     with h5py.File(filename, "w") as f:
         f['train_input'] = train_input
         f['train_cap_input'] = train_cap_input
+        f['train_suffix_input'] = train_suffix_input
         f['train_output'] = train_output
         if valid:
             f['valid_input'] = valid_input
             f['valid_cap_input'] = valid_cap_input
+            f['valid_suffix_input'] = valid_suffix_input
             f['valid_output'] = valid_output
         if test:
             f['test_input'] = test_input
             f['test_cap_input'] = test_cap_input
+            f['test_suffix_input'] = test_suffix_input
             f['test_ids'] = test_ids
         f['nfeatures'] = np.array([V], dtype=np.int32)
         f['ncapfeatures'] = np.array([4], dtype=np.int32)
+        f['nsuffixfeatures'] = np.array([len(suffix_to_idx) + 1], dtype=np.int32)
         f['nclasses'] = np.array([C], dtype=np.int32)
 
         f['word_vecs'] = embed

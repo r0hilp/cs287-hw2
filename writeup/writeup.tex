@@ -2,7 +2,8 @@
 \documentclass[11pt]{article}
 
 \usepackage{common}
-\title{HW0: Sample Assignment}
+\usepackage{hyperref}
+\title{HW2: NLP From Scratch}
 \author{Alexander Rush \\ srush@seas.harvard.edu \and Sam Wiseman \\ swiseman@seas.harvard.edu }
 \begin{document}
 
@@ -19,28 +20,17 @@ In Section $2$, we introduce our notation and give a description of our problem 
 
 \section{Problem Description}
 
-Our raw data consists of pairs $(w_i, t_i)$, where $w_i$ is a word and $t_i$ is its corresponding part of speech tag. The $t_i$ are elements of a finite set of classes $\mcT$. 
+Our raw data consists of pairs $(w_i, t_i)$, where $w_i$ is a word and $t_i$ is its corresponding part of speech tag. The $t_i$ are elements of a finite set of classes $\mcT$, which we take as the list of POS tags provided in the homework. Example tags are NNP, VBD, VBZ, etc. and in this problem we have a total of $|\mcT| = 45$ tags.
 
 We construct a feature representation $\phi(w_i)$ of each word as follows. 
 
-First, construct the vocabulary $\mcV$ of the training and testing sets. To keep this from growing too large, we only use lower-case words. Furthermore, we map any uncommon words to a special ``RARE'' word, where we use the words in the publicly available data from [Glove paper] as our ``common words'' dictionary. Then, we can associate a sparse one-hot feature vector $j_i \in \{0,1\}^{|\mcV|}$ to $w_i$ that represents the index $j$ that $w_i$ maps to in $\mcV$. 
+First, construct the vocabulary $\mcV$ of the training and testing sets. To keep this from growing too large, we only use lower-case words. Furthermore, we map any uncommon words to a special ``RARE'' word, where we use the words in the publicly available data from [Glove paper] as our ``common words'' dictionary. Then, we can associate a sparse one-hot feature vector $j_i \in \{0,1\}^{|\mcV|}$ to word $w_i$ that represents the index $j$ that $w_i$ maps to in $\mcV$.
 
 Second, we can also construct a sparse one-hot feature vector $c_i \in \{0,1\}^c$ that keeps track of the capitalization information in $w_i$ that we lost above. This tracks whether $w_i$ is all uppercase, all lowercase, starts with an uppercase letter, contains an uppercase letter, or satisfies none of these conditions. 
 
 Finally, we add context by not only adding in the features of $w_i$ to $\phi(w_i)$, but also adding in the features of the words in a \emph{window} around $w_i$. In our case, we use a window of size $5$, so $\phi(w_i)$ consists of vectors $\boldx_{word} = \{j_{i-2}, j_{i-1},j_i, j_{i+1}, j_{i+2}\}$ and $\boldx_{cap} = \{c_{i-2}, c_{i-1}, c_i, c_{i+1}, c_{i+2}\}$ of vocabulary and capitalization features corresponding to the surrounding word window, which we will denote by $\boldw_i$ or $\boldw$ for short. 
 
 Our goal is to learn a function $f: (\{0,1\}^{|\mcV|} \times \{0,1\}^c) \to [0,1]^\mcT$ that takes in a window of words $\boldw$ and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the probability $p(k|w_3)$ of the middle word $w_3 \in \boldw$ having tag $k$. 
-
-% NLP is also
-% full of sequences. For instance sentences, $w_1, \ldots, w_N$, where
-% here $N$ is a constant length and $w_i \in \mcV$ for all
-% $i \in \{1, \ldots N\}$. If we pretend sentences are all the same
-% length, we can have scoring function over sentences,
-% $s : \mcV^N \mapsto \reals$.  One might be defined as:
-
-% \[ s(w_1, \ldots, w_N) = \sum_{i = 1}^N p(w_i | w_{i-2}, w_{i-1}), \]
-
-% \noindent where $p$ is the bigram probability, which we will cover later in the class.
 
 \section{Model and Algorithms}
 
@@ -143,18 +133,24 @@ where the gradients are optimized via stochastic gradient descent like in our la
 
 \end{itemize}
 
+\subsection{Training Methods}
+
+We ran vanilla batch stochastic gradient descent on training and validation. For preliminary results we ran SGD for at least 5 epochs, and then stopped when relative validation loss (defined as the fractional change in validation loss) dropped below $0.1\%$.
+
+We continued training on the neural model (with Glove word embeddings) when it was clear that the model had not completed training with this criterion. The use of validation error rather than training error prevents overfitting.
 
 \section{Experiments}
 
-Finally we end with the experimental section. Each assignment will make clear the main experiments and baselines that you should run. For these experiments you should present a main results table. Here we give a sample Table~\ref{tab:results}. In addition to these results you should describe in words what the table shows and the relative performance of the models.
+We ran batch SGD for maximum 20 epochs with batch size 32, learning rate 0.01, ....
 
-Besides the main results we will also ask you to present other results
-comparing particular aspects of the models. For instance, for word
-embedding experiments, we may ask you to show a chart of the projected
-word vectors. This experiment will lead to something like
-Figure~\ref{fig:clusters}. This should also be described within the
-body of the text itself.
+Training time (epoch, total)
 
+Loss curves
+
+We found that after 20 epochs, the neural model with pretrained word embeddings had the best validation rate, but training had not yet converged. Thus, we ran it for about 10 more epochs until the validation error stopped decreasing.
+
+
+Table~\ref{tab:results} gives a summary of the results of each model.
 
 \begin{table}[h]
 \centering
@@ -162,27 +158,33 @@ body of the text itself.
  \toprule
  Model &  & Acc. \\
  \midrule
- \textsc{Baseline 1} & & 0.45\\
- \textsc{Baseline 2} & & 2.59 \\
- \textsc{Model 1} & & 10.59  \\
- \textsc{Model 2} & &13.42 \\
- \textsc{Model 3} & & 7.49\\
+ \textsc{Naive Bayes} & & 0.45\\
+ \textsc{Naive Bayes (w/o capitalization)} & & 0.45\\
+ \textsc{Logistic Regression} & & 2.59 \\
+ \textsc{Neural (no pretraining)} & & 10.59  \\
+ \textsc{Neural (with Glove embeddings)} & &13.42 \\
  \bottomrule
 \end{tabular}
-\caption{\label{tab:results} Table with the main results.}
+\caption{\label{tab:results} Results on PTB POS tagging.}
 \end{table}
 
+As an extension, we also tried to run Adadelta. However, because it saves an equal number of parameters
 
+
+Figure~\ref{fig:clusters}.
 \begin{figure}
   \centering
   \includegraphics[width=6cm]{cluster_viz}
   \caption{\label{fig:clusters} Sample qualitative chart.}
 \end{figure}
 
-
 \section{Conclusion}
 
-End the write-up with a very short recap of the main experiments and the main results. Describe any challenges you may have faced, and what could have been improved in the model.
+In this homework...
+
+We found that training these neural models takes a significant amount of time, and thus careful logging and saving models after each epoch was important. Running on Odyssey also helped by offloading computation to a cloud server.
+
+The code for this homework can be found here: \url{https://github.com/r0hilp/cs287-hw2}
 
 \bibliographystyle{apalike}
 \bibliography{writeup}

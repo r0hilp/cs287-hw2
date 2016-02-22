@@ -14,6 +14,7 @@ cmd:option('-warm_start', '', 'torch file with previous model')
 cmd:option('-test_model', '', 'model to test on')
 cmd:option('-model_out_name', 'train', 'output file name of model')
 cmd:option('-optim_method', 'sgd', 'loss function optimization method')
+cmd:option('-use_suffix', 0, 'use suffix features')
 
 -- Hyperparameters
 cmd:option('-use_cap', 1, 'use capitalization')
@@ -123,6 +124,12 @@ function linear_model()
   cap_embed.weight[1]:zero()
   embeds:add(word_embed)
   embeds:add(cap_embed)
+  if opt.use_suffix == 1 then
+    local suffix_embed = nn.LookupTable(nsuffixfeatures * window_size, nclasses)
+    suffix_embed.weight[1]:zero()
+    embeds:add(suffix_embed)
+  end
+
   model:add(embeds)
   model:add(nn.JoinTable(2)) -- 2 for batch
 
@@ -141,23 +148,35 @@ function neural_model(word_vecs)
   local model = nn.Sequential()
   local embeds = nn.ParallelTable()
   local word_embed = nn.LookupTable(nfeatures * window_size, vec_size)
-  word_embed.weight[1]:zero()
-  local cap_embed = nn.LookupTable(ncapfeatures * window_size, opt.cap_vec)
-  cap_embed.weight[1]:zero()
   if opt.use_glove == 1 then
     word_embed.weight = word_vecs:repeatTensor(window_size, 1)
   end
+  word_embed.weight[1]:zero()
+  local cap_embed = nn.LookupTable(ncapfeatures * window_size, opt.cap_vec)
+  cap_embed.weight[1]:zero()
   embeds:add(word_embed)
   embeds:add(cap_embed)
+  if opt.use_suffix == 1 then
+    local suffix_embed = nn.LookupTable(nsuffixfeatures * window_size, opt.cap_vec)
+    suffix_embed.weight[1]:zero()
+    embeds:add(suffix_embed)
+  end
   model:add(embeds)
   
   local view = nn.ParallelTable()
   view:add(nn.View(vec_size * window_size)) -- concat
   view:add(nn.View(opt.cap_vec * window_size))
+  if opt.use_suffix == 1 then
+    view:add(nn.View(opt.cap_vec * window_size))
+  end
   model:add(view)
 
   model:add(nn.JoinTable(2)) -- 2 for batch
-  model:add(nn.Linear((vec_size + opt.cap_vec) * window_size, opt.hidden))
+  local lin_size = vec_size + opt.cap_vec
+  if opt.use_suffix == 1 then
+    lin_size = lin_size + opt.cap_vec
+  end
+  model:add(nn.Linear(lin_size * window_size, opt.hidden))
   model:add(nn.HardTanh())
   model:add(nn.Linear(opt.hidden, nclasses))
   model:add(nn.LogSoftMax())
@@ -165,7 +184,7 @@ function neural_model(word_vecs)
   return model
 end
 
-function model_eval(model, criterion, X, X_cap, Y)
+function model_eval(model, criterion, X, X_cap, Y, X_suffix)
     -- batch eval
     model:evaluate()
     local N = X:size(1)
@@ -180,9 +199,15 @@ function model_eval(model, criterion, X, X_cap, Y)
         end
         local X_batch = X:narrow(1, batch, sz)
         local X_cap_batch = X_cap:narrow(1, batch, sz)
+        local X_suffix_batch = X_suffix:narrow(1, batch, sz)
         local Y_batch = Y:narrow(1, batch, sz)
 
-        local outputs = model:forward{X_batch, X_cap_batch}
+        local outputs
+        if opt.use_suffix == 1 then
+          outputs = model:forward{X_batch, X_cap_batch, X_suffix_batch}
+        else
+          outputs = model:forward{X_batch, X_cap_batch}
+        end
         local loss = criterion:forward(outputs, Y_batch)
 
         local _, correct = compute_err(Y_batch, outputs)
@@ -193,7 +218,7 @@ function model_eval(model, criterion, X, X_cap, Y)
     return total_loss / N, total_correct / N
 end
 
-function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
+function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs, X_suffix, valid_X_suffix)
   local eta = opt.eta
   local batch_size = opt.batch_size
   local max_epochs = opt.max_epochs
@@ -213,6 +238,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
   local shuffle = torch.randperm(N):long()
   X = X:index(1, shuffle)
   X_cap = X_cap:index(1, shuffle)
+  X_suffix = X_suffix:index(1, shuffle)
   Y = Y:index(1, shuffle)
 
   -- only call this once
@@ -242,6 +268,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
           end
           local X_batch = X:narrow(1, batch, sz)
           local X_cap_batch = X_cap:narrow(1, batch, sz)
+          local X_suffix_batch = X_suffix:narrow(1, batch, sz)
           local Y_batch = Y:narrow(1, batch, sz)
 
           -- closure to return err, df/dx
@@ -254,7 +281,13 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
             grads:zero()
 
             -- forward
-            local outputs = model:forward{ X_batch, X_cap_batch }
+            local inputs 
+            if opt.use_suffix == 1 then
+              inputs = { X_batch, X_cap_batch, X_suffix_batch }
+            else
+              inputs = { X_batch, X_cap_batch }
+            end
+            local outputs = model:forward(inputs)
             local loss = criterion:forward(outputs, Y_batch)
 
             -- track errors
@@ -263,7 +296,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
 
             -- compute gradients
             local df_do = criterion:backward(outputs, Y_batch)
-            model:backward({ X_batch, X_cap_batch }, df_do)
+            model:backward(inputs, df_do)
 
           --model:get(1):get(1).gradWeight[1]:zero()
           --model:get(1):get(2).gradWeight[1]:zero()
@@ -285,7 +318,7 @@ function train_model(X, X_cap, Y, valid_X, valid_X_cap, valid_Y, word_vecs)
 
       print('Train loss:', total_loss / N)
 
-      local loss, valid_percent = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y)
+      local loss, valid_percent = model_eval(model, criterion, valid_X, valid_X_cap, valid_Y, valid_X_suffix)
       print('Valid loss:', loss)
       print('Valid percent:', valid_percent)
 
@@ -311,17 +344,21 @@ function main()
    nfeatures = f:read('nfeatures'):all():long()[1]
    --ncapfeatures = f:read('ncapfeatures'):all():long()[1]
    ncapfeatures = 5
+   nsuffixfeatures = f:read('nsuffixfeatures'):all():long()[1]
    window_size = opt.window_size
 
    print('Loading data...')
    local X = f:read('train_input'):all():long()
    local X_cap = f:read('train_cap_input'):all():long()
+   local X_suffix = f:read('train_suffix_input'):all():long()
    local Y = f:read('train_output'):all()
    local valid_X = f:read('valid_input'):all():long()
    local valid_X_cap = f:read('valid_cap_input'):all():long()
+   local valid_X_suffix = f:read('valid_suffix_input'):all():long()
    local valid_Y = f:read('valid_output'):all()
    local test_X = f:read('test_input'):all():long()
    local test_X_cap = f:read('test_cap_input'):all():long()
+   local test_X_suffix = f:read('test_suffix_input'):all():long()
    local test_ids = f:read('test_ids'):all():long()
    -- Word embeddings from glove
    local word_vecs = f:read('word_vecs'):all()
@@ -329,10 +366,13 @@ function main()
 
    local X_win = window_features(X, nfeatures)
    local X_cap_win = window_features(X_cap, ncapfeatures)
+   local X_suffix_win = window_features(X_suffix, nsuffixfeatures)
    local valid_X_win = window_features(valid_X, nfeatures)
    local valid_X_cap_win = window_features(valid_X_cap, ncapfeatures)
+   local valid_X_suffix_win = window_features(valid_X_suffix, nsuffixfeatures)
    local test_X_win = window_features(test_X, nfeatures)
    local test_X_cap_win = window_features(test_X_cap, ncapfeatures)
+   local test_X_suffix_win = window_features(test_X_suffix, nsuffixfeatures)
 
    -- Train.
    if opt.action == 'train' then
@@ -342,7 +382,7 @@ function main()
     if opt.classifier == 'nb' then
         W, W_cap, b = train_nb(X_win, X_cap_win, Y)
     else
-        model = train_model(X_win, X_cap_win, Y, valid_X_win, valid_X_cap_win, valid_Y, word_vecs)
+        model = train_model(X_win, X_cap_win, Y, valid_X_win, valid_X_cap_win, valid_Y, word_vecs, X_suffix_win, valid_X_suffix_win)
     end
 
     -- Validate.
@@ -351,7 +391,7 @@ function main()
     if opt.classifier == 'nb' then
       pred, percent = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
     else
-      loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y)
+      loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y, X_suffix_win, valid_X_suffix_win)
     end
     print('Percent correct:', percent)
 
@@ -366,7 +406,12 @@ function main()
     print('Testing...')
     local W, W_cap, b
     local model = torch.load(opt.test_model).model
-    local outputs = model:forward{test_X_win, test_X_cap_win}
+    local outputs
+    if opt.use_suffix == 1 then
+      model:forward{test_X_win, test_X_cap_win, test_X_suffix_win}
+    else 
+      model:forward{test_X_win, test_X_cap_win}
+    end
     local _, pred = torch.max(outputs, 2)
     --local test_pred = eval(test_X_win, test_X_cap_win, valid_Y, W, W_cap, b)
     f = io.open('PTB_pred.test', 'w')
