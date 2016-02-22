@@ -30,7 +30,11 @@ Second, we can also construct a sparse one-hot feature vector $c_i \in \{0,1\}^c
 
 Finally, we add context by not only adding in the features of $w_i$ to $\phi(w_i)$, but also adding in the features of the words in a \emph{window} around $w_i$. In our case, we use a window of size $5$, so $\phi(w_i)$ consists of vectors $\boldx_{word} = \{j_{i-2}, j_{i-1},j_i, j_{i+1}, j_{i+2}\}$ and $\boldx_{cap} = \{c_{i-2}, c_{i-1}, c_i, c_{i+1}, c_{i+2}\}$ of vocabulary and capitalization features corresponding to the surrounding word window, which we will denote by $\boldw_i$ or $\boldw$ for short. 
 
-Our goal is to learn a function $f: (\{0,1\}^{|\mcV|} \times \{0,1\}^c) \to [0,1]^\mcT$ that takes in a window of words $\boldw$ and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the probability $p(k|w_3)$ of the middle word $w_3 \in \boldw$ having tag $k$. 
+Our goal is to learn a function $f: (\{0,1\}^{|\mcV|} \times \{0,1\}^c) \to [0,1]^\mcT$ that takes in a window of words $\boldw$ and outputs a prediction vector $\hat{\boldy}$ where $\hat{y}_k$ is the probability $p(k|w_3)$ of the middle word $w_3 \in \boldw$ having tag $k$.
+
+\subsection{Extension: Suffix Features}
+
+As an extension to the baseline model described in Collobert et al, we add in suffix features as well. %%%
 
 \section{Model and Algorithms}
 
@@ -135,22 +139,44 @@ where the gradients are optimized via stochastic gradient descent like in our la
 
 \subsection{Training Methods}
 
-We ran vanilla batch stochastic gradient descent on training and validation. For preliminary results we ran SGD for at least 5 epochs, and then stopped when relative validation loss (defined as the fractional change in validation loss) dropped below $0.1\%$.
+We ran vanilla batch stochastic gradient descent on training and validation sets. For batches, we shuffled the training set once and iterated over it for each epoch. For preliminary results we ran SGD for at least 5 epochs, and then stopped when relative validation loss (defined as the fractional change in validation loss) dropped below $0.1\%$.
 
 We continued training on the neural model (with Glove word embeddings) when it was clear that the model had not completed training with this criterion. The use of validation error rather than training error prevents overfitting.
 
 \section{Experiments}
 
-We ran batch SGD for maximum 20 epochs with batch size 32, learning rate 0.01, ....
+We ran batch SGD for maximum 20 epochs with batch size 32 and learning rate 0.01. For naive Bayes we used $\alpha = 1$. For neural models, we used word embedding dimension 50, capitalization feature embedding dimension 5, and hidden layer size 300 (as in Collobert et al). We ran most experiments on Odyssey with 16GB memory.
 
-Training time (epoch, total)
+Training time tended to vary for each model depending on the Odyssey server it ran on and time of day. Table~\ref{tab:timings} gives some ballpark timing results for each model.
 
-Loss curves
+\begin{table}[h]
+\centering
+\begin{tabular}{llr}
+ \toprule
+ Model &  & Timing \\
+ \midrule
+ \textsc{Naive Bayes} & & 16 s\\
+ \textsc{Logistic Regression (per epoch)} & & 10 min \\
+ \textsc{Neural (per epoch)} & &12 min \\
+ \bottomrule
+\end{tabular}
+\caption{\label{tab:timing} Timing results on PTB training.}
+\end{table}
+
+%For the PTB dataset, which has 950885 training points, a batch size of 32 gives a training time of 
+
+Figure ~\ref{fig:loss} shows the training and validation loss over epochs for the neural model with Glove word embeddings. Note that loss consistently decreases, and we stopped training when validation loss stopped decreasing. The bump in the validation accuracy is from when we restart training, and is possibly due to a new batch shuffle.
+
+\begin{figure}
+	\centering
+	\includegraphics[scale=0.4]{../loss_plots}
+	\includegraphics[scale=0.4]{../acc_plot}
+	\caption{\label{fig:loss} Training curves.}
+\end{figure}
 
 We found that after 20 epochs, the neural model with pretrained word embeddings had the best validation rate, but training had not yet converged. Thus, we ran it for about 10 more epochs until the validation error stopped decreasing.
 
-
-Table~\ref{tab:results} gives a summary of the results of each model.
+Table~\ref{tab:results} gives the classification accuracy of each model on the validation set. The results shown are after training 20 epochs, except for models with Glove embeddings (which we trained for longer). For neural models, GLOVE means we used pretrained Glove word embeddings and SUFF means we included suffix features.
 
 \begin{table}[h]
 \centering
@@ -158,31 +184,24 @@ Table~\ref{tab:results} gives a summary of the results of each model.
  \toprule
  Model &  & Acc. \\
  \midrule
- \textsc{Naive Bayes} & & 0.45\\
- \textsc{Naive Bayes (w/o capitalization)} & & 0.45\\
- \textsc{Logistic Regression} & & 2.59 \\
- \textsc{Neural (no pretraining)} & & 10.59  \\
- \textsc{Neural (with Glove embeddings)} & &13.42 \\
+ \textsc{Naive Bayes} & & 91.27\\
+ \textsc{Naive Bayes (w/o capitalization)} & & 89.98 \\
+ \textsc{Logistic Regression} & & 76.50 \\
+ \textsc{Neural} & & 92.11  \\
+ \textsc{Neural+GLOVE} & &96.41 \\
+ \textsc{Neural+GLOVE+SUFF} & & ??? \\
  \bottomrule
 \end{tabular}
 \caption{\label{tab:results} Results on PTB POS tagging.}
 \end{table}
 
-As an extension, we also tried to run Adadelta. However, because it saves an equal number of parameters
-
-
-Figure~\ref{fig:clusters}.
-\begin{figure}
-  \centering
-  \includegraphics[width=6cm]{cluster_viz}
-  \caption{\label{fig:clusters} Sample qualitative chart.}
-\end{figure}
+As an extension, we also tried to run Adadelta instead of SGD. However, because it saves $O(P)$ values where $P$ is the number of parameters in the model, it turns out to be prohibitively expensive for memory, and training did not finish in time.
 
 \section{Conclusion}
 
 In this homework...
 
-We found that training these neural models takes a significant amount of time, and thus careful logging and saving models after each epoch was important. Running on Odyssey also helped by offloading computation to a cloud server.
+We found that training these neural models takes a significant amount of time, and thus careful logging and saving models after each epoch was important. Running on Odyssey also helped by offloading computation to a cloud server. We expect that with GPUs, training these models will be much quicker and easier.
 
 The code for this homework can be found here: \url{https://github.com/r0hilp/cs287-hw2}
 

@@ -107,7 +107,7 @@ function eval(X, X_cap, Y, W, W_cap, b)
   local pred = linear(X, X_cap, W, W_cap, b)
   
   local argmax, correct = compute_err(Y, pred)
-  return argmax, correct
+  return argmax, correct / X:size(1)
 end
 
 function linear_model()
