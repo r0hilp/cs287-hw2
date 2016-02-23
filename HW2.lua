@@ -391,7 +391,7 @@ function main()
     if opt.classifier == 'nb' then
       pred, percent = eval(valid_X_win, valid_X_cap_win, valid_Y, W, W_cap, b)
     else
-      loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y, X_suffix_win, valid_X_suffix_win)
+      loss, percent = model_eval(model, nn.ClassNLLCriterion(), valid_X_win, valid_X_cap_win, valid_Y, valid_X_suffix_win)
     end
     print('Percent correct:', percent)
 
@@ -408,9 +408,9 @@ function main()
     local model = torch.load(opt.test_model).model
     local outputs
     if opt.use_suffix == 1 then
-      model:forward{test_X_win, test_X_cap_win, test_X_suffix_win}
+      outputs = model:forward{test_X_win, test_X_cap_win, test_X_suffix_win}
     else 
-      model:forward{test_X_win, test_X_cap_win}
+      outputs = model:forward{test_X_win, test_X_cap_win}
     end
     local _, pred = torch.max(outputs, 2)
     --local test_pred = eval(test_X_win, test_X_cap_win, valid_Y, W, W_cap, b)
